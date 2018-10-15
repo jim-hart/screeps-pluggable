@@ -10,6 +10,6 @@ Although my approach has worked well personally so far, the purpose of this repo
 Below you can find lists of actively maintained files.  Each link points to a more detailed description of whats provided in addition the the source files themselves.
 
 ### Game Prototypes
-  * Packed:  `CostMatrix` extensions offering fast compression and small memory footprint
-  * LIDAR :  Micro-optimized, overload safe replacements to commonly used `RoomPosition` methods
+  * [Packed](/Prototypes/Packed/):  `CostMatrix` extensions offering fast compression and small memory footprint
+  * [LIDAR](/Prototypes/LIDAR/)  :  Micro-optimized, overload safe replacements to commonly used `RoomPosition` methods
 

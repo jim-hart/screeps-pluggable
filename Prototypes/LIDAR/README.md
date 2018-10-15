@@ -14,11 +14,22 @@ All replacements take the same input, and return the same output provided by the
 If you want to replace all calls to the original methods with the new versions (including calls made by other API methods), use `LidarOverloaded`.  All replacements were tested hundreds of thousands of times on the live server to ensure that return values between the original and updated versions matched exactly for the same input.  I use the overloaded version in my own code and have experience no problems.
 
 If you don't want to overload the original methods names, you can use `LidarExtensions` instead; functionality is exactly the same, except the names have been changed to the following:
-  * isEqualTo ======> `isSameAs`
-  * isNearTo =======> `isCloseTo`
-  * inRangeTo ======> `inDistanceTo`
-  * getRangeTo =====> `getDistanceTo`
-  * getDirectionTo => `getHeadingTo`
+
+```node
+const pos1 = new RoomPosition(25, 25, 'W0N0');
+const pos2 = new RoomPosition(0, 0, 'W0N0');
+
+pos1.isEqualTo(pos2) === pos1.isSameAs(pos2);
+
+pos1.isNearTo(pos2) === pos1.isCloseTo(pos2);
+
+pos1.inRangeTo(pos2, 3) === pos1.inDistanceTo(pos2);
+
+pos1.getRangeTo(pos2) === pos1.getDistanceTo(pos2);
+
+pos1.getDirectionTo(pos2) === pos1.getHeadingTo(pos2);
+
+```
 
 
 ### Benefits
