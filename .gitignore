@@ -59,3 +59,9 @@ typings/
 
 # next.js build output
 .next
+
+
+# project-specific
+*.sublime-workspace
+*.sublime-project
+__pycache__/
