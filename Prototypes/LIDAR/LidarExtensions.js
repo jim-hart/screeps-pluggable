@@ -11,7 +11,7 @@
  * @constant
  * @type       {number}
  */
-const HEADING_OFFSET = 122;
+const HEADING_OFFSET = Game.map.getWorldSize();
 
 /**
  * Slightly faster version of Math.abs(). Any value larger than a 32 bit signed
