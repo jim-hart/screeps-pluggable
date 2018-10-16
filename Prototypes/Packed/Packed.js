@@ -12,6 +12,12 @@
  */
 const OFFSETS = [];
 
+/**
+ * Used as an additional offset during compression and decompression of
+ * CostMatrix instances
+ *
+ * @type       {number}
+ */
 const SPACER = 22
 
 /**
