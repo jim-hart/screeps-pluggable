@@ -250,7 +250,7 @@ class Navigator {
         cache.stuck = 0;
         if (opts.stealth) {
             opts.anyRoom = true;
-            opts.costByArea = this.getStealthMap(creep.room);
+            opts.addArea = this.getStealthMap(creep.room);
         }
         return Cartographer.findPath(creep.pos, goal, opts);
     }
@@ -491,26 +491,25 @@ class Atlas {
      * @param      {Object}    [opts]                Optional parameters for
      *                                               customizing matrix
      *                                               generation behavior
-     * @param      {Object[]}  [opts.costByArea]     Sets all positions in a NxN
+     * @param      {boolean}   [opts.trackCreeps]    If true, treat creep
+     *                                               positions as unwalkable
+     * @param      {boolean}   [opts.refreshMatrix]  Creates and caches a new
+     *                                               CostMatrix regardless if an
+     *                                               existing matrix is stored
+     *                                               in costs.base
+     * @param      {Object[]}  [opts.addArea]        Sets all positions in a NxN
      *                                               area around all provided
      *                                               objects with the same cost
      *                                               value. This can be used to
      *                                               weight positions based on
      *                                               their range to a central
      *                                               position(s).
-     * @param      {boolean}   [opts.refreshMatrix]  Creates and caches a new
-     *                                               CostMatrix regardless if an
-     *                                               existing matrix is stored
-     *                                               in costs.base
-     * @param      {boolean}   [opts.trackCreeps]    If true, creep positions
-     *                                               will be reflected in return
-     *                                               CostMatrix instance
      *
      * @return     {PathFinder.CostMatrix}  A deserialized CostMatrix instance
      */
     static getCosts(id, opts = {}) {
         if (this.lastReset < Game.time) {
-            this.reset();
+            this._reset();
         }
         if (!PACKED_COSTS.has(id) || opts.refreshMatrix) {
             this.refresh(id, opts);
@@ -521,7 +520,7 @@ class Atlas {
         if (!(opts.trackCreeps && id in Game.rooms)) {
             return COSTS_ROOM[id];
         }
-        return id in COSTS_CREEP ? COSTS_CREEP[id] : this.addCreeps(id);
+        return id in COSTS_CREEP ? COSTS_CREEP[id] : this._addCreeps(id);
     }
 
     /**
@@ -536,81 +535,11 @@ class Atlas {
         if (!(id in Game.rooms)) {
             return;
         }
-        this.addStructures(Game.rooms[id], matrix);
-        if (opts.costByArea) {
-            this.addArea(id, matrix, opts.costByArea);
+        this._addStructures(Game.rooms[id], matrix);
+        if (opts.addArea) {
+            this._addArea(id, matrix, opts.addArea);
         }
         PACKED_COSTS.set(id, matrix.pack());
-    }
-
-    /**
-     * Sets structure position costs in a CostMatrix object.
-     *
-     * @param      {Room}                   room    The target Room object
-     * @param      {PathFinder.CostMatrix}  matrix  CostMatrix instance
-     *                                              customization options
-     */
-    static addStructures(room, matrix) {
-        let objects = room.find(FIND_STRUCTURES);
-        if (_.size(Game.constructionSites)) {
-            const sites = room.find(FIND_MY_CONSTRUCTION_SITES, {
-                filter: s => OBSTACLE_OBJECT_TYPES.includes(s.structureType),
-            });
-            objects.push(...sites);
-        }
-
-        for (let i = 0; i < objects.length; i++) {
-            let [cost, obj] = [0, objects[i]];
-            if (obj.structureType === STRUCTURE_ROAD) {
-                cost = 1;
-            } else if (obj.structureType === STRUCTURE_RAMPART) {
-                cost = obj.my || obj.isPublic ? 0 : 255;
-            } else if (obj.structureType === STRUCTURE_CONTAINER) {
-                cost = 5;
-            } else {
-                cost = 255;
-            }
-
-            if (cost > matrix.get(obj.pos.x, obj.pos.y)) {
-                matrix.update(obj.pos.x, obj.pos.y, cost);
-            }
-        }
-    }
-
-    /**
-     * Sets costs of tiles in an area around objects in opts.costByArea
-     *
-     * @param      {string}                 id      The target room name
-     * @param      {PathFinder.CostMatrix}  matrix  CostMatrix instance
-     *
-     * @param      {Object[]}  goals            Target objects and customization
-     *                                          options
-     * @param      {Object[]}  goals[].objects  Objects that serve as a central
-     *                                          reference point for area
-     *                                          generation
-     * @param      {boolean}   goals[].replace  If false, existing values in
-     *                                          provided matrix will not be
-     *                                          overwritten
-     * @param      {number}    goals[].size     The desired NxN size of the area
-     *                                          to reflect
-     * @param      {number}    goals[].cost     The cost to assign to each
-     *                                          position within the designated
-     *                                          area
-     */
-    static addArea(id, matrix, goals) {
-        for (const goal of goals) {
-            let grid = [];
-            for (let i = 0; i < goal.objects.length; i++) {
-                grid.push(...this.getWalkableArea(goal.objects[i], goal.size));
-            }
-            let threshold = goal.replace === false ? 1 : 255;
-            for (let i = 0; i < grid.length; i++) {
-                let [x, y] = grid[i];
-                if (matrix.get(x, y) < threshold) {
-                    matrix.update(x, y, goal.cost);
-                }
-            }
-        }
     }
 
     /**
@@ -646,24 +575,6 @@ class Atlas {
     }
 
     /**
-     * Reflects creep position in a CostMatrix instance
-     *
-     * @param      {string}                 id      The target room name
-     * @return     {PathFinder.CostMatrix}  clone of CostMatrix found at
-     *                                      COSTS_ROOM[id] with creep positions
-     *                                      added
-     */
-    static addCreeps(id) {
-        const matrix = COSTS_ROOM[id].clone();
-        const creeps = Game.rooms[id].find(FIND_CREEPS);
-        for (let i = 0; i < creeps.length; i++) {
-            let pos = creeps[i].pos;
-            matrix.set(pos.x, pos.y, 255);
-        }
-        return (COSTS_CREEP[id] = matrix);
-    }
-
-    /**
      * Gets terrain mask at x, y coordinates in a room
      *
      * @param      {number}  x         The x coordinate
@@ -680,11 +591,108 @@ class Atlas {
     }
 
     /**
-     * Deletes all unpacked CostMatrix instances
+     * Sets structure position costs in a CostMatrix object.
+     *
+     * @private
+     * @param      {Room}                   room    The target Room object
+     * @param      {PathFinder.CostMatrix}  matrix  CostMatrix instance
+     *                                              customization options
      */
-    static reset() {
+    static _addStructures(room, matrix) {
+        let objects = room.find(FIND_STRUCTURES);
+        if (_.size(Game.constructionSites)) {
+            const sites = room.find(FIND_MY_CONSTRUCTION_SITES, {
+                filter: s => OBSTACLE_OBJECT_TYPES.includes(s.structureType),
+            });
+            objects.push(...sites);
+        }
+
+        for (let i = 0; i < objects.length; i++) {
+            let [cost, obj] = [0, objects[i]];
+            if (obj.structureType === STRUCTURE_ROAD) {
+                cost = 1;
+            } else if (obj.structureType === STRUCTURE_RAMPART) {
+                cost = obj.my || obj.isPublic ? 0 : 255;
+            } else if (obj.structureType === STRUCTURE_CONTAINER) {
+                cost = 5;
+            } else {
+                cost = 255;
+            }
+
+            if (cost > matrix.get(obj.pos.x, obj.pos.y)) {
+                matrix.update(obj.pos.x, obj.pos.y, cost);
+            }
+        }
+    }
+
+    /**
+     * Sets costs of tiles in an area around objects in opts.addArea
+     *
+     * @private
+     * @param      {string}                 id      The target room name
+     * @param      {PathFinder.CostMatrix}  matrix  CostMatrix instance
+     *
+     * @param      {Object[]}  goals            Target objects and customization
+     *                                          options
+     * @param      {Object[]}  goals[].objects  Objects that serve as a central
+     *                                          reference point for area
+     *                                          generation
+     * @param      {boolean}   goals[].replace  If false, existing values in
+     *                                          provided matrix will not be
+     *                                          overwritten
+     * @param      {number}    goals[].size     The desired NxN size of the area
+     *                                          to reflect
+     * @param      {number}    goals[].cost     The cost to assign to each
+     *                                          position within the designated
+     *                                          area
+     */
+    static _addArea(id, matrix, goals) {
+        for (const goal of goals) {
+            let grid = [];
+            for (let i = 0; i < goal.objects.length; i++) {
+                grid.push(...this.getWalkableArea(goal.objects[i], goal.size));
+            }
+            let threshold = goal.replace === false ? 1 : 255;
+            for (let i = 0; i < grid.length; i++) {
+                let [x, y] = grid[i];
+                if (matrix.get(x, y) < threshold) {
+                    matrix.update(x, y, goal.cost);
+                }
+            }
+        }
+    }
+
+    /**
+     * Reflects creep position in a CostMatrix instance
+     *
+     * @private
+     * @param      {string}                 id      The target room name
+     * @return     {PathFinder.CostMatrix}  clone of CostMatrix found at
+     *                                      COSTS_ROOM[id] with creep positions
+     *                                      added
+     */
+    static _addCreeps(id) {
+        const matrix = COSTS_ROOM[id].clone();
+        const creeps = Game.rooms[id].find(FIND_CREEPS);
+        for (let i = 0; i < creeps.length; i++) {
+            let pos = creeps[i].pos;
+            matrix.set(pos.x, pos.y, 255);
+        }
+        return (COSTS_CREEP[id] = matrix);
+    }
+
+    /**
+     * Deletes all unpacked CostMatrix instances
+     * @private
+     */
+    static _reset() {
         if (Game.time % RESET_FREQUENCY === 0) {
-            this.clean();
+            for (const roomName of PACKED_COSTS.keys()) {
+                if (!(roomName in Game.rooms)) {
+                    continue;
+                }
+                PACKED_COSTS.delete(roomName);
+            }
         }
         const unpacked = _.keys(COSTS_ROOM);
         for (let i = 0; i < unpacked.length; i++) {
@@ -694,19 +702,6 @@ class Atlas {
         }
         // noinspection JSUnusedGlobalSymbols
         this.lastReset = Game.time;
-    }
-
-    /**
-     * Deletes all serialized CostMatrix instances in PACKED_COSTS if visibility
-     * is available in associated room
-     */
-    static clean() {
-        for (const roomName of PACKED_COSTS.keys()) {
-            if (!(roomName in Game.rooms)) {
-                continue;
-            }
-            PACKED_COSTS.delete(roomName);
-        }
     }
 }
 Atlas.lastReset = Game.time;
