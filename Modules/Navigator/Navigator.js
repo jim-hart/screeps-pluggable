@@ -6,6 +6,7 @@
  */
 'use strict';
 
+// ---------------------------MODULE LEVEL VARIABLES---------------------------
 /**
  * Holds serialized CostMatrix Instances
  * @see        {@Atlas}
@@ -16,6 +17,7 @@ const PACKED_COSTS = new Map();
 
 /**
  * Holds Room.Terrain instances
+ * @see        {@Atlas}
  *
  * @type       {Map}
  */
@@ -42,43 +44,25 @@ const COSTS_CREEP = {};
  * Controls how often globally cached CostMatrix objects are deleted.  By
  * default, module level cache is cleared every 500 ticks; increase or decrease
  * as desired
+ * @see        {@Atlas}
  *
  * @type       {number}
  */
 const RESET_FREQUENCY = 500;
 
 /**
- * Holds current circulation of cost values set in cached/active CostMatrix
- * instances.
- *
- * The index of a cost value is used as an offset during serialization, which
- * allows both a room position and the cost value itself to be reduced to a
- * single character.
- *
- * Total entries in this array cannot exceed 22 due to .charCodeAt() range
- * @see        {@PathFinder.CostMatrix.prototype.update}
- * @see        {@PathFinder.CostMatrix.prototype.pack}
- * @see        {@Atlas.unpack}
- *
- * @type       {number[]}
- */
-const OFFSETS = [];
-
-/**
- * Used as a offset when deserializing and serializing CostMatrix instances *
- * @see        {PathFinder.CostMatrix.prototype.update}
- * @see        {PathFinder.CostMatrix.prototype.pack}
+ * Used for checking for checking against reserved room
+ * @see        {@Cartographer}
  *
  * @constant
- * @type       {number}
+ * @type       {string}
  */
-const SPACER = 22;
+const USERNAME = (_.find(Game.structures) || {owner: ''}).owner.username;
 
 /**
  * Directions constants ordered in a way to easily get the complement of a
  * different direction
  * @see        {@Navigator.isAtExpected}
- *
  *
  * @readonly
  * @type       {number[]}
@@ -95,8 +79,33 @@ const COMPLIMENTS = [
 ];
 
 /**
- * Creep.moveTo replacement
+ * Holds current circulation of cost values set in cached/active CostMatrix
+ * instances.
+ *
+ * The index of a cost value is used as an offset during serialization, which
+ * allows both a room position and the cost value itself to be reduced to a
+ * single character.
+ *
+ * Total entries in this array cannot exceed 22 due to .charCodeAt() range
+ * @see        {@PathFinder.CostMatrix.prototype.update}
+ * @see        {@PathFinder.CostMatrix.prototype.pack}
+ * @see        {@PathFinder.CostMatrix.unpack}
+ *
+ * @type       {number[]}
  */
+const OFFSETS = [];
+
+/**
+ * Used as a offset when deserializing and serializing CostMatrix instances *
+ * @see        {PathFinder.CostMatrix.prototype.update}
+ * @see        {PathFinder.CostMatrix.prototype.pack}
+ *
+ * @constant
+ * @type       {number}
+ */
+const SPACER = 22;
+
+// ---------------------------------NAVIGATOR----------------------------------
 class Navigator {
     /**
      * Gets creeps next move based on comparisons of previous and current game
@@ -115,20 +124,24 @@ class Navigator {
      *                                                 will be considered when
      *                                                 attempting to find a path
      *                                                 to target position
-     * @return     {number}        move direction constant
+     * @param      {*}             [opts.*]            Any optional parameter
+     *                                                 supported by
+     *                                                 PathFinder.search()
+     *
+     * @return     {number}  move direction constant
      */
     static getNextMove(creep, goal, opts = {}) {
         const cache = creep.memory._nav || (creep.memory._nav = {});
 
         let pathError = false;
-        if (!(cache.path && cache.target === positionToId(goal))) {
+        if (!(cache.path && cache.target === this.positionToId(goal))) {
             pathError = true;
         } else if (this.isAtExpected(creep, cache)) {
             cache.path = cache.path.substring(1);
         } else if (cache.stuck > 2 && 50 > _.random(100) - cache.stuck) {
             pathError = opts.trackCreeps || this.moveObstruction(creep, opts);
         }
-        cache.last = positionToId(creep.pos);
+        cache.last = this.positionToId(creep.pos);
 
         if (pathError) {
             cache.path = this.getNewPath(creep, goal, cache, opts);
@@ -148,8 +161,10 @@ class Navigator {
      */
     static isAtExpected(creep, cache) {
         const p1 = creep.pos;
-        const p2 = positionFromId(cache.last);
-        if ((isExit(p1) && isExit(p2)) || (p1.x === p2.x && p1.y === p2.y)) {
+        const p2 = this.positionFromId(cache.last);
+
+        let isExit = p1.x === 0 || p2.x === 0 || p1.y === 49 || p2.y === 49;
+        if (isExit || (p1.x === p2.x && p1.y === p2.y)) {
             if (++cache.stuck > 1) {
                 creep.say(`:${cache.stuck}:`);
             }
@@ -208,7 +223,7 @@ class Navigator {
             let src = goals[i];
 
             let lair = src.pos.findClosestByRange(lairs);
-            let walkable = getWalkableArea(src.pos, 1).map(t => {
+            let walkable = Atlas.getWalkableArea(src.pos, 1).map(t => {
                 let pos = new RoomPosition(t[0], t[1], room.name);
                 return {pos, range: pos.getRangeTo(lair)};
             });
@@ -231,22 +246,44 @@ class Navigator {
      *                       MOVE directions
      */
     static getNewPath(creep, goal, cache, opts) {
-        cache.target = positionToId(goal);
+        cache.target = this.positionToId(goal);
         cache.stuck = 0;
-        if (creep.memory.destination) {
-            opts.heuristicWeight = 1.23;
-        }
         if (opts.stealth) {
             opts.anyRoom = true;
             opts.costByArea = this.getStealthMap(creep.room);
         }
         return Cartographer.findPath(creep.pos, goal, opts);
     }
+
+    /**
+     * Converts a RoomPosition to a small string suitable for storage in Memory
+     *
+     * @param      {RoomPosition}  pos     The position
+     * @return     {string}        Position converted to a unique ID in respect
+     *                             to its x, y, and roomName vlaues
+     */
+    static positionToId(pos) {
+        return String.fromCharCode(pos.x + 192, pos.y + 192) + pos.roomName;
+    }
+
+    /**
+     * Converts a RoomPosition id value back to a RoomPosition object
+     *
+     * @param      {string}        id      any RoomPosition id created by
+     *                                     positionToId()
+     * @return     {RoomPosition}  A new RoomPosition using values pulled from
+     *                             id
+     */
+    static positionFromId(id) {
+        return new RoomPosition(
+            id.charCodeAt(0) - 192,
+            id.charCodeAt(1) - 192,
+            id.substring(2)
+        );
+    }
 }
 
-/**
- * Utility class for route and pathfinding generation
- */
+// --------------------------------CARTOGRAPHER--------------------------------
 class Cartographer {
     /**
      * Sets properties used by class instance; property assignment deferred to
@@ -260,36 +297,23 @@ class Cartographer {
      *                                                 generation
      * @param      {boolean}       [opts.trackCreeps]  Treat creeps as
      *                                                 obstacles.
-     * @param      {boolean}       [opts.stealth]      If true, path is
-     *                                                 calculated up to SK rooms
-     *                                                 so it will be
-     *                                                 recalculated again with
-     *                                                 once it has visibility
-     *                                                 upon arrival obstacles.
-     * @param      {boolean}       [opts.flee]         Calculate a path away
-     *                                                 from the target
-     * @param      {number}        [opts.range]        Explicitly defines a
-     *                                                 range to target. Range is
-     *                                                 automatically determined
-     *                                                 if left undefined.
      * @param      {boolean}       [opts.anyRoom]      Weight all rooms equally
      *                                                 during route finding
-     * @return     {string}        Pathfinder result in serialized form
+     *
+     * @return     {string}  Pathfinder result in serialized form
      */
     static findPath(start, goal, opts = {}) {
-        const distance = Game.map.getRoomLinearDistance(
-            start.roomName,
-            goal.roomName
-        );
+        const [r1, r2] = [start.roomName, goal.roomName];
+        const distance = Game.map.getRoomLinearDistance(r1, r2);
 
-        let result = this.callPathFinder(start, goal, opts, distance > 2);
+        let route = distance > 2 ? this.findRoute(r1, r2, opts) : null;
+        let result = this.callPathFinder(start, goal, opts, route);
+        if (result.incomplete && distance <= 2) {
+            route = this.findRoute(r1, r2, opts);
+            result = this.callPathFinder(start, goal, opts, route);
+        }
         if (result.incomplete) {
-            console.log(
-                `Path Incomplete: ${start}->${goal} ${result.path.length}`
-            );
-            if (!result.path.find(p => p.roomName !== start.roomName)) {
-                result = this.callPathFinder(start, goal, opts);
-            }
+            console.log(`Path Incomplete: ${start}->${goal}`);
         }
         return this.serializePath(result.path, start, opts);
     }
@@ -298,37 +322,36 @@ class Cartographer {
      * Re-callable method to PathFinder.search() whose arguments are tailored
      * around current state of this.start, this.end, and this.opts
      *
-     * @param      {RoomPosition}  start       Starting position
-     * @param      {RoomPosition}  end         Target position
-     * @param      {Object}        opts        Pathfinding options
-     * @param      {boolean}       [useRoute]  If true, PathFinder will only use
-     *                                         a subset of rooms when trying to
-     *                                         find part to target
+     * @param      {RoomPosition}  start   Starting position
+     * @param      {RoomPosition}  end     Target position
+     * @param      {Object}        opts    Pathfinding options
+     * @param      {string[]}      route   Array of room names PathFinder is
+     *                                     allowed to search
      * @return     {Object}        PathFinder.search() result object
      */
-    static callPathFinder(start, end, opts, useRoute) {
+    static callPathFinder(start, end, opts, route) {
         const goal = {
             range: 'range' in opts ? opts.range : this.getRange(end, opts),
             pos: end,
         };
-        if (useRoute) {
-            opts.route = this.getRoute(start.roomName, end.roomName, opts);
-        }
 
         return PathFinder.search(start, goal, {
             roomCallback:
                 opts.roomCallback ||
                 (roomName => {
-                    if (!opts.route || opts.route.includes(roomName)) {
-                        return Atlas.getCosts(roomName, opts);
+                    if (route && !route.includes(roomName)) {
+                        return false;
                     }
-                    return false;
+                    if (opts.avoid && opts.avoid.includes(roomName)) {
+                        return false;
+                    }
+                    return Atlas.getCosts(roomName, opts);
                 }),
             plainCost: opts.plainCost || 1,
             swampCost: opts.swampCost || 5,
             flee: opts.flee,
             maxOps: opts.maxOps || 20000,
-            maxRooms: useRoute ? opts.route.length : 16,
+            maxRooms: opts.maxRooms || (useRoute ? opts.route.length : 16),
             maxCost: opts.maxCost || Infinity,
             heuristicWeight: opts.heuristicWeight || 1.2,
         });
@@ -346,18 +369,18 @@ class Cartographer {
      */
     static getRoute(start, end, opts) {
         const route = Game.map.findRoute(start, end, {
-            routeCallback(name) {
-                if (opts.avoid && opts.avoid.includes(name)) {
+            routeCallback(roomName) {
+                if (opts.avoid && opts.avoid.includes(roomName)) {
                     return Infinity;
                 }
-                if (opts.anyRoom || name in Memory.rooms) {
+                if (opts.anyRoom || isMyRoom(roomName)) {
                     return 1;
                 }
-                const type = getRoomType(name);
+                const type = getRoomType(roomName);
                 if (type === 'sourceKeeper') {
                     return Infinity;
                 }
-                return type === 'highway';
+                return type === 'highway' ? 1 : 2;
             },
         });
         return [start, ..._.map(route, 'room')];
@@ -418,12 +441,48 @@ class Cartographer {
         }
         return result;
     }
+
+    /**
+     * Gets the type of a room
+     *
+     * @param      {string}  roomName  The room name
+     * @return     {string}  The room type (claimable, highway, or SK)
+     */
+    static getRoomType(roomName) {
+        const parsed = new RegExp('^[WE]([0-9]+)[NS]([0-9]+)$').exec(roomName);
+
+        const [latitude, longitude] = [parsed[1] % 10, parsed[2] % 10];
+        if (!(latitude && longitude)) {
+            return 'highway';
+        }
+        if (Math.abs(latitude - 5) <= 1 && 1 >= Math.abs(longitude - 5)) {
+            return 'sourceKeeper';
+        }
+        return 'basic';
+    }
+
+    /**
+     * Determines if room is either owned or reserved by player running this
+     * code
+     *
+     * @param      {string}   roomName  The room name
+     * @return     {boolean}  True if room is owned or reserved by self, else
+     *                        false
+     */
+    static isMyRoom(roomName) {
+        const room = Game.rooms[roomName];
+        if (!(room && room.controller)) {
+            return false;
+        }
+        const controller = room.controller;
+        if (!(controller.my || controller.reservation)) {
+            return false;
+        }
+        return controller.my || controller.reservation.username === USERNAME;
+    }
 }
 
-/**
- * Utility class for managing and generating CostMatrix objects
- *
- */
+// -----------------------------------ATLAS------------------------------------
 class Atlas {
     /**
      * Gets a CostMatrix instance associated with a room's name
@@ -542,7 +601,7 @@ class Atlas {
         for (const goal of goals) {
             let grid = [];
             for (let i = 0; i < goal.objects.length; i++) {
-                grid.push(...getWalkableArea(goal.objects[i], goal.size));
+                grid.push(...this.getWalkableArea(goal.objects[i], goal.size));
             }
             let threshold = goal.replace === false ? 1 : 255;
             for (let i = 0; i < grid.length; i++) {
@@ -552,6 +611,38 @@ class Atlas {
                 }
             }
         }
+    }
+
+    /**
+     * Returns array of [x, y] pairs that represent a NxN grid of non-wall tiles
+     *
+     * @param      {RoomPosition|RoomObject}  obj           Object to serve as a
+     *                                                      reference position
+     * @param      {number}                   size          The desired size of
+     *                                                      the grid
+     * @param      {boolean}                  [allowExits]  if true, exit tiles
+     *                                                      will be included in
+     *                                                      grid
+     *
+     * @return     {Array[]}  Array of [x, y] pairs that don't share space with
+     *                        a wall
+     */
+    static getWalkableArea(obj, size, allowExits = true) {
+        const [pos, max, min] = [obj.pos || obj, Math.max, Math.min];
+
+        const [left, right] = [max(0, pos.x - size), min(49, pos.x + size)];
+        const [top, bottom] = [max(0, pos.y - size), min(49, pos.y + size)];
+
+        const tiles = [];
+        for (let x = left; x <= right; x++) {
+            for (let y = top; y <= bottom; y++) {
+                if (this.isWallAt(x, y, pos.roomName)) {
+                    continue;
+                }
+                tiles.push([x, y]);
+            }
+        }
+        return tiles;
     }
 
     /**
@@ -618,102 +709,9 @@ class Atlas {
         }
     }
 }
-/**
- * Used to track tick changes in order to trigger cached matrix refreshing
- *
- * @type       {number}
- */
 Atlas.lastReset = Game.time;
 
-// ----------------------------------Helpers-----------------------------------
-/**
- * Returns array of [x, y] pairs that represent a NxN grid of non-wall tiles
- *
- * @param      {RoomPosition|RoomObject}  obj           Object to serve as a
- *                                                      reference position
- * @param      {number}                   size          The desired size of the
- *                                                      grid
- * @param      {boolean}                  [allowExits]  if true, exit tiles will
- *                                                      be included in grid
- *
- * @return     {Array[]}  Array of [x, y] pairs that don't share space with a
- *                        wall
- */
-function getWalkableArea(obj, size, allowExits = true) {
-    const [pos, max, min] = [obj.pos || obj, Math.max, Math.min];
-
-    const [left, right] = [max(0, pos.x - size), min(49, pos.x + size)];
-    const [top, bottom] = [max(0, pos.y - size), min(49, pos.y + size)];
-
-    const tiles = [];
-    for (let x = left; x <= right; x++) {
-        for (let y = top; y <= bottom; y++) {
-            if (Atlas.isWallAt(x, y, pos.roomName)) {
-                continue;
-            }
-            tiles.push([x, y]);
-        }
-    }
-    return tiles;
-}
-
-/**
- * Gets the type of a room
- *
- * @param      {string}  roomName  The room name
- * @return     {string}  The room type (claimable, highway, or SK)
- */
-function getRoomType(roomName) {
-    const parsed = new RegExp('^[WE]([0-9]+)[NS]([0-9]+)$').exec(roomName);
-
-    const [latitude, longitude] = [parsed[1] % 10, parsed[2] % 10];
-    if (!(latitude && longitude)) {
-        return 'highway';
-    }
-    if (Math.abs(latitude - 5) <= 1 && 1 >= Math.abs(longitude - 5)) {
-        return 'sourceKeeper';
-    }
-    return 'basic';
-}
-
-/**
- * Determines if position sits on exit tile
- *
- * @param      {RoomPosition}   pos     The position
- * @return     {boolean}  True if position is an exit, else False.
- */
-function isExit(pos) {
-    return pos.x === 0 || pos.y === 0 || pos.x === 49 || pos.y === 49;
-}
-
-/**
- * Converts a RoomPosition to a small string suitable for storage in Memory
- *
- * @param      {RoomPosition}  pos     The position
- * @return     {string}        Position converted to a unique ID in respect to
- *                             its x, y, and roomName vlaues
- */
-function positionToId(pos) {
-    return String.fromCharCode(pos.x + 192, pos.y + 192) + pos.roomName;
-}
-
-/**
- * Converts a RoomPosition id value back to a RoomPosition object
- *
- * @param      {string}        id      any RoomPosition id created by
- *                                     positionToId()
- * @return     {RoomPosition}  A new RoomPosition using values pulled from id
- */
-function positionFromId(id) {
-    return new RoomPosition(
-        id.charCodeAt(0) - 192,
-        id.charCodeAt(1) - 192,
-        id.substring(2)
-    );
-}
-
-// ----------------------------Prototype Extensions----------------------------
-
+// ---------------------------------PROTOTYPES---------------------------------
 Object.defineProperty(PathFinder.CostMatrix.prototype, 'costMap', {
     /**
      * Gets values that reflect modified CostMatrix positions and their
@@ -754,7 +752,6 @@ PathFinder.CostMatrix.prototype.update = function(x = 0, y = 0, cost = 0) {
  * Translates CostMatrix to a string representing all positions in room where
  * the associated cost is > 0
  *
- *
  * @return     {string}  Serialized form of CostMatrix in its current state
  */
 PathFinder.CostMatrix.prototype.pack = function() {
@@ -779,11 +776,41 @@ PathFinder.CostMatrix.prototype.pack = function() {
 };
 
 /**
+ * Converts an encoded CostMatrix string back to its original form
+ *
+ * @static
+ * @param      {string}  packed  A CostMatrix in its serialized, encoded form
+ *
+ * @return     {PathFinder.CostMatrix}  CostMatrix instance with position costs
+ *                                      pulled from the encoded string
+ */
+PathFinder.CostMatrix.unpack = function(packed) {
+    let [codec, start] = [OFFSETS, 0];
+    if (packed[0] === TRIGGER) {
+        codec = [];
+        for (let i = 2; i < 2 + parseInt(packed[1], 10); i++) {
+            codec.push(packed.charCodeAt(i));
+        }
+        start += codec.length + 2;
+    }
+
+    const matrix = new PathFinder.CostMatrix();
+    for (let i = start; i < packed.length; i++) {
+        let value = packed.charCodeAt(i);
+        matrix._bits[(value / SPACER) | 0] = codec[value % SPACER];
+    }
+    return matrix;
+};
+
+/**
  * Provides interface to Navigator() class and acts as a replacement for moveTo
  *
  * @param      {RoomObject|RoomPosition}  target  travel destination
  * @param      {Object}    [opts]  Navigator, Cartographer, and Atlas options
  */
 Creep.prototype.navigateTo = function(target, opts) {
+    if (this.fatigue || this.swapScheduled) {
+        return;
+    }
     this.move(Navigator.getNextMove(this, target.pos || target, opts));
 };

@@ -13,11 +13,11 @@
     try {
         require('Packed');
     } catch (e) {
-        const P = PathFinder;
         console.log('Atlas: Packed.js not found, defaulting to API methods');
+        const P = PathFinder;
         P.CostMatrix.prototype.update = P.CostMatrix.prototype.set;
         P.CostMatrix.prototype.pack = P.CostMatrix.prototype.serialize;
-        P.CostMatrix.prototype.unpack = P.CostMatrix.prototype.deserialize;
+        P.CostMatrix.unpack = P.CostMatrix.deserialize;
     }
 })();
 
@@ -184,7 +184,7 @@ class Atlas {
         for (const goal of goals) {
             let grid = [];
             for (let i = 0; i < goal.objects.length; i++) {
-                grid.push(...getWalkableArea(goal.objects[i], goal.size));
+                grid.push(...this.getWalkableArea(goal.objects[i], goal.size));
             }
             let threshold = goal.replace === false ? 1 : 255;
             for (let i = 0; i < grid.length; i++) {
@@ -194,6 +194,38 @@ class Atlas {
                 }
             }
         }
+    }
+
+    /**
+     * Returns array of [x, y] pairs that represent a NxN grid of non-wall tiles
+     *
+     * @param      {RoomPosition|RoomObject}  obj           Object to serve as a
+     *                                                      reference position
+     * @param      {number}                   size          The desired size of
+     *                                                      the grid
+     * @param      {boolean}                  [allowExits]  if true, exit tiles
+     *                                                      will be included in
+     *                                                      grid
+     *
+     * @return     {Array[]}  Array of [x, y] pairs that don't share space with
+     *                        a wall
+     */
+    static getWalkableArea(obj, size, allowExits = true) {
+        const [pos, max, min] = [obj.pos || obj, Math.max, Math.min];
+
+        const [left, right] = [max(0, pos.x - size), min(49, pos.x + size)];
+        const [top, bottom] = [max(0, pos.y - size), min(49, pos.y + size)];
+
+        const tiles = [];
+        for (let x = left; x <= right; x++) {
+            for (let y = top; y <= bottom; y++) {
+                if (this.isWallAt(x, y, pos.roomName)) {
+                    continue;
+                }
+                tiles.push([x, y]);
+            }
+        }
+        return tiles;
     }
 
     /**
@@ -260,43 +292,11 @@ class Atlas {
         }
     }
 }
-
 /**
  * Used to track tick changes in order to trigger cached matrix refreshing
  *
  * @type       {number}
  */
 Atlas.lastReset = Game.time;
-
-/**
- * Returns array of [x, y] pairs that represent a NxN grid of non-wall tiles
- *
- * @param      {RoomPosition|RoomObject}  obj           Object to serve as a
- *                                                      reference position
- * @param      {number}                   size          The desired size of the
- *                                                      grid
- * @param      {boolean}                  [allowExits]  if true, exit tiles will
- *                                                      be included in grid
- *
- * @return     {Array[]}  Array of [x, y] pairs that don't share space with a
- *                        wall
- */
-function getWalkableArea(obj, size, allowExits = true) {
-    const [pos, max, min] = [obj.pos || obj, Math.max, Math.min];
-
-    const [left, right] = [max(0, pos.x - size), min(49, pos.x + size)];
-    const [top, bottom] = [max(0, pos.y - size), min(49, pos.y + size)];
-
-    const tiles = [];
-    for (let x = left; x <= right; x++) {
-        for (let y = top; y <= bottom; y++) {
-            if (Atlas.isWallAt(x, y, pos.roomName)) {
-                continue;
-            }
-            tiles.push([x, y]);
-        }
-    }
-    return tiles;
-}
 
 module.exports = Atlas;

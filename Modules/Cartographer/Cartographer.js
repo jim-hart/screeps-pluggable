@@ -9,7 +9,9 @@ const Atlas = (function() {
     try {
         costManager = require('Atlas');
     } catch (e) {
-        console.log('Cartographer: Atlas not found, falling back to generic');
+        console.log(
+            'Cartographer: Atlas not found, using generic callback instead'
+        );
         costManager = {
             getCosts: genericCostCallback,
             isWallAt: function(x, y, roomName) {
@@ -20,25 +22,6 @@ const Atlas = (function() {
     }
     return costManager;
 })();
-
-/**
- * Gets the type of a room
- *
- * @param      {string}  roomName  The room name
- * @return     {string}  The room type (claimable, highway, or SK)
- */
-function getRoomType(roomName) {
-    const parsed = new RegExp('^[WE]([0-9]+)[NS]([0-9]+)$').exec(roomName);
-
-    const [latitude, longitude] = [parsed[1] % 10, parsed[2] % 10];
-    if (!(latitude && longitude)) {
-        return 'highway';
-    }
-    if (Math.abs(latitude - 5) <= 1 && 1 >= Math.abs(longitude - 5)) {
-        return 'sourceKeeper';
-    }
-    return 'basic';
-}
 
 /**
  * A basic callback function for PathFinder if Atlas isn't being used.
@@ -90,36 +73,23 @@ class Cartographer {
      *                                                 generation
      * @param      {boolean}       [opts.trackCreeps]  Treat creeps as
      *                                                 obstacles.
-     * @param      {boolean}       [opts.stealth]      If true, path is
-     *                                                 calculated up to SK rooms
-     *                                                 so it will be
-     *                                                 recalculated again with
-     *                                                 once it has visibility
-     *                                                 upon arrival obstacles.
-     * @param      {boolean}       [opts.flee]         Calculate a path away
-     *                                                 from the target
-     * @param      {number}        [opts.range]        Explicitly defines a
-     *                                                 range to target. Range is
-     *                                                 automatically determined
-     *                                                 if left undefined.
      * @param      {boolean}       [opts.anyRoom]      Weight all rooms equally
      *                                                 during route finding
-     * @return     {string}        Pathfinder result in serialized form
+     *
+     * @return     {string}  Pathfinder result in serialized form
      */
     static findPath(start, goal, opts = {}) {
-        const distance = Game.map.getRoomLinearDistance(
-            start.roomName,
-            goal.roomName
-        );
+        const [r1, r2] = [start.roomName, goal.roomName];
+        const distance = Game.map.getRoomLinearDistance(r1, r2);
 
-        let result = this.callPathFinder(start, goal, opts, distance > 2);
+        let route = distance > 2 ? this.findRoute(r1, r2, opts) : null;
+        let result = this.callPathFinder(start, goal, opts, route);
+        if (result.incomplete && distance <= 2) {
+            route = this.findRoute(r1, r2, opts);
+            result = this.callPathFinder(start, goal, opts, route);
+        }
         if (result.incomplete) {
-            console.log(
-                `Path Incomplete: ${start}->${goal} ${result.path.length}`
-            );
-            if (!result.path.find(p => p.roomName !== start.roomName)) {
-                result = this.callPathFinder(start, goal, opts);
-            }
+            console.log(`Path Incomplete: ${start}->${goal}`);
         }
         return this.serializePath(result.path, start, opts);
     }
@@ -128,37 +98,36 @@ class Cartographer {
      * Re-callable method to PathFinder.search() whose arguments are tailored
      * around current state of this.start, this.end, and this.opts
      *
-     * @param      {RoomPosition}  start       Starting position
-     * @param      {RoomPosition}  end         Target position
-     * @param      {Object}        opts        Pathfinding options
-     * @param      {boolean}       [useRoute]  If true, PathFinder will only use
-     *                                         a subset of rooms when trying to
-     *                                         find part to target
+     * @param      {RoomPosition}  start   Starting position
+     * @param      {RoomPosition}  end     Target position
+     * @param      {Object}        opts    Pathfinding options
+     * @param      {string[]}      route   Array of room names PathFinder is
+     *                                     allowed to search
      * @return     {Object}        PathFinder.search() result object
      */
-    static callPathFinder(start, end, opts, useRoute) {
+    static callPathFinder(start, end, opts, route) {
         const goal = {
             range: 'range' in opts ? opts.range : this.getRange(end, opts),
             pos: end,
         };
-        if (useRoute) {
-            opts.route = this.getRoute(start.roomName, end.roomName, opts);
-        }
 
         return PathFinder.search(start, goal, {
             roomCallback:
                 opts.roomCallback ||
                 (roomName => {
-                    if (!opts.route || opts.route.includes(roomName)) {
-                        return Atlas.getCosts(roomName, opts);
+                    if (route && !route.includes(roomName)) {
+                        return false;
                     }
-                    return false;
+                    if (opts.avoid && opts.avoid.includes(roomName)) {
+                        return false;
+                    }
+                    return Atlas.getCosts(roomName, opts);
                 }),
             plainCost: opts.plainCost || 1,
             swampCost: opts.swampCost || 5,
             flee: opts.flee,
             maxOps: opts.maxOps || 20000,
-            maxRooms: useRoute ? opts.route.length : 16,
+            maxRooms: opts.maxRooms || (useRoute ? opts.route.length : 16),
             maxCost: opts.maxCost || Infinity,
             heuristicWeight: opts.heuristicWeight || 1.2,
         });
@@ -176,18 +145,18 @@ class Cartographer {
      */
     static getRoute(start, end, opts) {
         const route = Game.map.findRoute(start, end, {
-            routeCallback(name) {
-                if (opts.avoid && opts.avoid.includes(name)) {
+            routeCallback(roomName) {
+                if (opts.avoid && opts.avoid.includes(roomName)) {
                     return Infinity;
                 }
-                if (opts.anyRoom || name in Memory.rooms) {
+                if (opts.anyRoom || isMyRoom(roomName)) {
                     return 1;
                 }
-                const type = utils.getRoomType(name);
+                const type = getRoomType(roomName);
                 if (type === 'sourceKeeper') {
                     return Infinity;
                 }
-                return type === 'highway';
+                return type === 'highway' ? 1 : 2;
             },
         });
         return [start, ..._.map(route, 'room')];
@@ -233,7 +202,7 @@ class Cartographer {
     static serializePath(path, start, opts) {
         if (opts.stealth) {
             const index = path.findIndex(
-                p => utils.getRoomType(p.roomName) === 'sourceKeeper'
+                p => getRoomType(p.roomName) === 'sourceKeeper'
             );
             path = index !== -1 ? path.slice(0, index) : path;
         }
@@ -247,6 +216,45 @@ class Cartographer {
             current = position;
         }
         return result;
+    }
+
+    /**
+     * Gets the type of a room
+     *
+     * @param      {string}  roomName  The room name
+     * @return     {string}  The room type (claimable, highway, or SK)
+     */
+    static getRoomType(roomName) {
+        const parsed = new RegExp('^[WE]([0-9]+)[NS]([0-9]+)$').exec(roomName);
+
+        const [latitude, longitude] = [parsed[1] % 10, parsed[2] % 10];
+        if (!(latitude && longitude)) {
+            return 'highway';
+        }
+        if (Math.abs(latitude - 5) <= 1 && 1 >= Math.abs(longitude - 5)) {
+            return 'sourceKeeper';
+        }
+        return 'basic';
+    }
+
+    /**
+     * Determines if room is either owned or reserved by player running this
+     * code
+     *
+     * @param      {string}   roomName  The room name
+     * @return     {boolean}  True if room is owned or reserved by self, else
+     *                        false
+     */
+    static isMyRoom(roomName) {
+        const room = Game.rooms[roomName];
+        if (!(room && room.controller)) {
+            return false;
+        }
+        const controller = room.controller;
+        if (!(controller.my || controller.reservation)) {
+            return false;
+        }
+        return controller.my || controller.reservation.username === USERNAME;
     }
 }
 
