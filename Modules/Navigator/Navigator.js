@@ -290,17 +290,21 @@ class Cartographer {
      * method so class can be used as a globally accessible singleton to cut
      * down on GC costs
      *
-     * @param      {RoomPosition}  start               Origin position
-     * @param      {RoomPosition}  goal                Goal position
-     * @param      {Object}        opts                Optional parameters for
-     *                                                 customizing path
-     *                                                 generation
-     * @param      {boolean}       [opts.trackCreeps]  Treat creeps as
-     *                                                 obstacles.
-     * @param      {boolean}       [opts.anyRoom]      Weight all rooms equally
-     *                                                 during route finding
+     * @param      {RoomPosition}  start   Origin position
+     * @param      {RoomPosition}  goal    Goal position
      *
-     * @return     {string}  Pathfinder result in serialized form
+     * @param      {Object}   opts                Optional parameters for
+     *                                            customizing path generation
+     * @param      {boolean}  [opts.trackCreeps]  Treat creeps as obstacles.
+     * @param      {boolean}  [opts.anyRoom]      Weight all rooms equally
+     *                                            during route finding
+     * @param      {boolean}  [opts.serialize]    If explcitly provided as
+     *                                            false, the resulting path
+     *                                            won't be serialized and the
+     *                                            array of RoomPosition objects
+     *                                            will be returned instead
+     *
+     * @return     {string|RoomPosition[]}  Pathfinder.search().path result
      */
     static findPath(start, goal, opts = {}) {
         const [r1, r2] = [start.roomName, goal.roomName];
@@ -315,7 +319,19 @@ class Cartographer {
         if (result.incomplete) {
             console.log(`Path Incomplete: ${start}->${goal}`);
         }
-        return this.serializePath(result.path, start, opts);
+
+        let path = result.path;
+        if (opts.stealth) {
+            const index = path.findIndex(
+                p => getRoomType(p.roomName) === 'sourceKeeper'
+            );
+            path = index !== -1 ? path.slice(0, index) : path;
+        }
+
+        if (opts.serialize === false) {
+            return path;
+        }
+        return this.serializePath(path, start, opts);
     }
 
     /**
@@ -330,10 +346,7 @@ class Cartographer {
      * @return     {Object}        PathFinder.search() result object
      */
     static callPathFinder(start, end, opts, route) {
-        const goal = {
-            range: 'range' in opts ? opts.range : this.getRange(end, opts),
-            pos: end,
-        };
+        const goal = {range: this.getRange(end, opts), pos: end};
 
         return PathFinder.search(start, goal, {
             roomCallback:
@@ -347,11 +360,11 @@ class Cartographer {
                     }
                     return Atlas.getCosts(roomName, opts);
                 }),
-            plainCost: opts.plainCost || 1,
-            swampCost: opts.swampCost || 5,
+            plainCost: opts.plainCost || 3,
+            swampCost: opts.swampCost || 7,
             flee: opts.flee,
             maxOps: opts.maxOps || 20000,
-            maxRooms: opts.maxRooms || (useRoute ? opts.route.length : 16),
+            maxRooms: opts.maxRooms || (route ? route.length : 16),
             maxCost: opts.maxCost || Infinity,
             heuristicWeight: opts.heuristicWeight || 1.2,
         });
@@ -394,6 +407,9 @@ class Cartographer {
      * @return     {number}        The desired range to target
      */
     static getRange(goal, opts) {
+        if ('range' in opts) {
+            return opts.range;
+        }
         if (Atlas.isWallAt(goal.x, goal.y, goal.roomName)) {
             return 1;
         }
@@ -408,7 +424,6 @@ class Cartographer {
             .find(
                 s =>
                     s.structureType !== STRUCTURE_ROAD &&
-                    s.structureType !== STRUCTURE_RAMPART &&
                     s.structureType !== STRUCTURE_CONTAINER
             );
         return obstacle ? 1 : 0;
@@ -418,28 +433,52 @@ class Cartographer {
      * Converts an ordered array of RoomPositions to a serialized form suitable
      * for caching and use by Navigator() class
      *
-     * @param      {RoomPosition[]}  path     Array of RoomPosition objects
-     * @param      {RoomPosition}    start    The starting position
-     * @param      {Object}          opts     PathFinding options
-     * @return     {string}  Resulting path in string form
+     * @param      {RoomPosition[]}  path    Array of RoomPosition objects
+     * @param      {RoomPosition}    start   The starting position
+     * @param      {Object}          opts    PathFinding options
+     * @return     {string}          Resulting path in string form
      */
     static serializePath(path, start, opts) {
-        if (opts.stealth) {
-            const index = path.findIndex(
-                p => getRoomType(p.roomName) === 'sourceKeeper'
-            );
-            path = index !== -1 ? path.slice(0, index) : path;
-        }
-
-        let [result, current] = ['', start];
+        let [result, current, last] = ['', start, path.length];
         for (let i = 0; i < path.length; i++) {
             let position = path[i];
             if (position.roomName === current.roomName) {
                 result += current.getDirectionTo(position);
+            } else if (current.roomName === start.roomName) {
+                last = i;
             }
             current = position;
         }
+
+        if (opts.visualizePathStyle) {
+            this.visualizePath(path, start, opts, exit);
+        }
         return result;
+    }
+
+    /**
+     * Creates a poly visual for all RoomPositions found in starting room
+     *
+     * @param      {RoomPosition[]}  path    PathFinder.search() result path
+     * @param      {RoomPosition}    start   The starting position
+     * @param      {Object}          opts    PathFinding options
+     * @param      {number}          last    Number representing the index the
+     *                                       provided path shoudl be sliced up
+     *                                       to to exlcude positions not in
+     *                                       starting room
+     */
+    static visualizePath(path, start, opts, last = 0) {
+        if (last === 0) {
+            last = path.findIndex(p => p.roomName !== start.roomName);
+        }
+        new RoomVisual(start.roomName).poly(
+            last > 0 && last < path.length ? path.slice(0, last) : path,
+            _.defaults(opts.visualizePathStyle, {
+                opacity: 1,
+                stroke: 'aqua',
+                lineStlye: 'dashed',
+            })
+        );
     }
 
     /**

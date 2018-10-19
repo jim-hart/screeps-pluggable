@@ -13,3 +13,7 @@ Below you can find lists of actively maintained files.  Each link points to a mo
   * [Packed](/Prototypes/Packed/):  `CostMatrix` extensions offering fast compression and small memory footprint
   * [LIDAR](/Prototypes/LIDAR/)  :  Micro-optimized, overload safe replacements to commonly used `RoomPosition` methods
 
+### Modules
+  * [Atlas](/Modules/Atlas/):  Simple `CostMatrix` creation interface that provides automated, CPU efficient instance caching and retrieval.
+  * [Cartographer](/Modules/Cartographer/):  Multi-room pathfinding system with a small memory footprint
+  * [Navigator](/Modules/Navigator/):  Complete `moveTo()` replacement powered by `Atlas` and `Cartographer`, and inspired by `Traveler`.
